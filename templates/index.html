@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Docker Registry 管理系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/boxicons@2.0.7/css/boxicons.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+        .navbar {
+            box-shadow: 0 2px 4px rgba(0,0,0,.1);
+        }
+        .navbar-brand i {
+            font-size: 1.5rem;
+            margin-right: 0.5rem;
+            color: #0db7ed;
+        }
+        .card {
+            box-shadow: 0 0.125rem 0.25rem rgba(0,0,0,.075);
+            border: none;
+            margin-bottom: 1rem;
+        }
+        .card-header {
+            background-color: #fff;
+            border-bottom: 1px solid rgba(0,0,0,.125);
+        }
+        .log-container {
+            height: 400px;
+            overflow-y: auto;
+            background-color: #1e1e1e;
+            color: #fff;
+            padding: 1rem;
+            font-family: monospace;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        .log-entry {
+            margin-bottom: 0.5rem;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .log-entry.success {
+            color: #28a745;
+        }
+        .log-entry.error {
+            color: #dc3545;
+        }
+        .btn-primary {
+            background-color: #0db7ed;
+            border-color: #0db7ed;
+        }
+        .btn-primary:hover {
+            background-color: #0a8bbb;
+            border-color: #0a8bbb;
+        }
+        .btn i {
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class='bx bxl-docker mr-2'></i>
+                Docker Registry 管理系统
+            </a>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">镜像更新</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="updateForm">
+                            <div class="mb-3">
+                                <label for="imageNameWithTag" class="form-label">镜像名称 (格式: name:tag)</label>
+                                <input type="text" class="form-control" id="imageNameWithTag" placeholder="例如: nginx:latest" required>
+                                <small class="form-text text-muted">如果不指定标签，将默认使用 latest</small>
+                            </div>
+                            <button type="submit" class="btn btn-primary" id="submitBtn">
+                                <i class='bx bx-upload'></i> 更新并推送
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0">操作日志</h5>
+                        <button class="btn btn-sm btn-outline-secondary" id="clearLog">
+                            <i class='bx bx-trash'></i> 清除日志
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div id="logContainer" class="log-container">
+                            <!-- 日志内容将在这里动态显示 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const updateForm = document.getElementById('updateForm');
+            const logContainer = document.getElementById('logContainer');
+            const submitBtn = document.getElementById('submitBtn');
+            const clearLogBtn = document.getElementById('clearLog');
+            let eventSource = null;
+
+            function addLogEntry(message, type = 'info') {
+                const entry = document.createElement('div');
+                entry.className = `log-entry ${type}`;
+                entry.textContent = message;
+                logContainer.appendChild(entry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+
+            clearLogBtn.addEventListener('click', function() {
+                logContainer.innerHTML = '';
+            });
+
+            updateForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                const imageNameWithTag = document.getElementById('imageNameWithTag').value.trim();
+
+                if (!imageNameWithTag) {
+                    Swal.fire({
+                        icon: 'error',
+                        title: '错误',
+                        text: '请输入镜像名称'
+                    });
+                    return;
+                }
+
+                // 禁用提交按钮
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<i class="bx bx-loader-alt bx-spin"></i> 处理中...';
+
+                // 关闭之前的 EventSource 连接（如果存在）
+                if (eventSource) {
+                    eventSource.close();
+                }
+
+                // 创建新的 EventSource 连接
+                eventSource = new EventSource(`/update_and_push?_=${Date.now()}`);
+                
+                // 发送更新请求
+                try {
+                    const response = await fetch('/update_and_push', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            image_with_tag: imageNameWithTag
+                        })
+                    });
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+
+                    while (true) {
+                        const {value, done} = await reader.read();
+                        if (done) break;
+                        
+                        const text = decoder.decode(value);
+                        const lines = text.split('\n');
+                        
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const data = JSON.parse(line.slice(6));
+                                    addLogEntry(data.message, data.type);
+                                    
+                                    if (data.type === 'error') {
+                                        throw new Error(data.message);
+                                    }
+                                } catch (e) {
+                                    console.error('Error parsing SSE data:', e);
+                                }
+                            }
+                        }
+                    }
+
+                    Swal.fire({
+                        icon: 'success',
+                        title: '成功',
+                        text: '镜像更新并推送成功！'
+                    });
+
+                } catch (error) {
+                    console.error('Error:', error);
+                    Swal.fire({
+                        icon: 'error',
+                        title: '错误',
+                        text: error.message
+                    });
+                } finally {
+                    // 重置提交按钮
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="bx bx-upload"></i> 更新并推送';
+                    
+                    // 关闭 EventSource 连接
+                    if (eventSource) {
+                        eventSource.close();
+                        eventSource = null;
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>
